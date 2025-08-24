@@ -1,0 +1,138 @@
+version: '3.8'
+
+services:
+  # Frontend Service
+  frontend:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.frontend
+      args:
+        - VITE_API_URL=http://localhost:3001/api
+        - VITE_SUPABASE_URL=${SUPABASE_URL}
+        - VITE_SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
+    ports:
+      - "3000:80"
+    depends_on:
+      - api
+    environment:
+      - NODE_ENV=development
+    networks:
+      - python-learning-network
+
+  # API Service  
+  api:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.api
+    ports:
+      - "3001:3000"
+    depends_on:
+      - database
+      - redis
+    environment:
+      - NODE_ENV=development
+      - PORT=3000
+      - DATABASE_URL=postgresql://portal_admin:portal_password@database:5432/python_learning_portal
+      - REDIS_URL=redis://redis:6379
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY}
+      - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY}
+      - JWT_SECRET=${JWT_SECRET:-dev-jwt-secret}
+      - CORS_ORIGIN=http://localhost:3000
+    volumes:
+      - ../python-learning-api:/app
+      - /app/node_modules
+    networks:
+      - python-learning-network
+
+  # Auth Service
+  auth:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.auth
+    ports:
+      - "3002:3000"
+    depends_on:
+      - redis
+    environment:
+      - NODE_ENV=development  
+      - PORT=3000
+      - REDIS_URL=redis://redis:6379
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY}
+      - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY}
+      - JWT_SECRET=${JWT_SECRET:-dev-jwt-secret}
+    volumes:
+      - ../python-learning-auth:/app
+      - /app/node_modules
+    networks:
+      - python-learning-network
+
+  # Python Executor Service
+  executor:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.executor  
+    ports:
+      - "3003:8000"
+    environment:
+      - PYTHON_ENV=development
+      - REDIS_URL=redis://redis:6379
+      - MAX_EXECUTION_TIME=30
+      - MAX_MEMORY_MB=128
+    volumes:
+      - ../python-learning-executor:/app
+    networks:
+      - python-learning-network
+
+  # PostgreSQL Database
+  database:
+    image: postgres:14-alpine
+    environment:
+      - POSTGRES_DB=python_learning_portal
+      - POSTGRES_USER=portal_admin
+      - POSTGRES_PASSWORD=portal_password
+      - POSTGRES_INITDB_ARGS=--encoding=UTF-8
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-scripts:/docker-entrypoint-initdb.d
+    ports:
+      - "5432:5432"
+    networks:
+      - python-learning-network
+
+  # Redis Cache
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes --maxmemory 128mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    networks:
+      - python-learning-network
+
+  # nginx reverse proxy (simulates ALB locally)  
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+    depends_on:
+      - frontend
+      - api
+      - auth
+      - executor
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    networks:
+      - python-learning-network
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+
+networks:
+  python-learning-network:
+    driver: bridge
